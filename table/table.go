@@ -374,7 +374,7 @@ func (t *Table) initBiggestAndSmallest() error {
 
 			// Read checksum size.
 			readPos -= 4
-			buf, err := t.readOrErr(readPos, 4)
+			buf, err := t.read(readPos, 4)
 			if err != nil {
 				fmt.Fprintf(&debugBuf, "checksumLen: %v ", err)
 				return
@@ -385,7 +385,7 @@ func (t *Table) initBiggestAndSmallest() error {
 			// Read checksum.
 			checksum := &pb.Checksum{}
 			readPos -= checksumLen
-			if buf, err = t.readOrErr(readPos, checksumLen); err != nil {
+			if buf, err = t.read(readPos, checksumLen); err != nil {
 				fmt.Fprintf(&debugBuf, "checksum: %v ", err)
 				return
 			}
@@ -394,7 +394,7 @@ func (t *Table) initBiggestAndSmallest() error {
 
 			// Read index size from the footer.
 			readPos -= 4
-			if buf, err = t.readOrErr(readPos, 4); err != nil {
+			if buf, err = t.read(readPos, 4); err != nil {
 				fmt.Fprintf(&debugBuf, "indexLen: %v ", err)
 				return
 			}
@@ -404,7 +404,7 @@ func (t *Table) initBiggestAndSmallest() error {
 			// Read index.
 			readPos -= t.indexLen
 			t.indexStart = readPos
-			indexData, err := t.readOrErr(readPos, t.indexLen)
+			indexData, err := t.read(readPos, t.indexLen)
 			if err != nil {
 				fmt.Fprintf(&debugBuf, "index: %v ", err)
 				return
@@ -432,20 +432,10 @@ func (t *Table) initBiggestAndSmallest() error {
 }
 
 func (t *Table) read(off, sz int) ([]byte, error) {
-	return t.Bytes(off, sz)
-}
-
-func (t *Table) readNoFail(off, sz int) []byte {
-	res, err := t.read(off, sz)
-	y.Check(err)
-	return res
-}
-
-func (t *Table) readOrErr(off, sz int) ([]byte, error) {
 	if off < 0 {
-		return nil, errors.New("read offset less than zero. Data corrupted")
+		return nil, errors.New("read offset less than zero")
 	}
-	return t.readNoFail(off, sz), nil
+	return t.Bytes(off, sz)
 }
 
 // initIndex reads the index and populate the necessary table fields and returns
@@ -455,7 +445,7 @@ func (t *Table) initIndex() (*fb.BlockOffset, error) {
 
 	// Read checksum len from the last 4 bytes.
 	readPos -= 4
-	buf, err := t.readOrErr(readPos, 4)
+	buf, err := t.read(readPos, 4)
 	if err != nil {
 		return nil, err
 	}
@@ -467,7 +457,7 @@ func (t *Table) initIndex() (*fb.BlockOffset, error) {
 	// Read checksum.
 	expectedChk := &pb.Checksum{}
 	readPos -= checksumLen
-	if buf, err = t.readOrErr(readPos, checksumLen); err != nil {
+	if buf, err = t.read(readPos, checksumLen); err != nil {
 		return nil, err
 	}
 	if err := proto.Unmarshal(buf, expectedChk); err != nil {
@@ -476,7 +466,7 @@ func (t *Table) initIndex() (*fb.BlockOffset, error) {
 
 	// Read index size from the footer.
 	readPos -= 4
-	if buf, err = t.readOrErr(readPos, 4); err != nil {
+	if buf, err = t.read(readPos, 4); err != nil {
 		return nil, err
 	}
 	t.indexLen = int(y.BytesToU32(buf))
@@ -484,7 +474,7 @@ func (t *Table) initIndex() (*fb.BlockOffset, error) {
 	// Read index.
 	readPos -= t.indexLen
 	t.indexStart = readPos
-	data, err := t.readOrErr(readPos, t.indexLen)
+	data, err := t.read(readPos, t.indexLen)
 	if err != nil {
 		return nil, err
 	}
@@ -727,8 +717,11 @@ func (t *Table) DoesNotHave(hash uint32) bool {
 
 // readTableIndex reads table index from the sst and returns its pb format.
 func (t *Table) readTableIndex() (*fb.TableIndex, error) {
-	data := t.readNoFail(t.indexStart, t.indexLen)
-	var err error
+	data, err := t.read(t.indexStart, t.indexLen)
+	if err != nil {
+		return nil, y.Wrapf(err,
+			"Error while decrypting table index for the table %d in readTableIndex", t.id)
+	}
 	// Decrypt the table index if it is encrypted.
 	if t.shouldDecrypt() {
 		if data, err = t.decrypt(data, false); err != nil {
