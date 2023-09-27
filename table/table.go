@@ -374,27 +374,41 @@ func (t *Table) initBiggestAndSmallest() error {
 
 			// Read checksum size.
 			readPos -= 4
-			buf := t.readNoFail(readPos, 4)
+			buf, err := t.readOrErr(readPos, 4)
+			if err != nil {
+				fmt.Fprintf(&debugBuf, "checksumLen: %v ", err)
+				return
+			}
 			checksumLen := int(y.BytesToU32(buf))
 			fmt.Fprintf(&debugBuf, "checksumLen: %d ", checksumLen)
 
 			// Read checksum.
 			checksum := &pb.Checksum{}
 			readPos -= checksumLen
-			buf = t.readNoFail(readPos, checksumLen)
+			if buf, err = t.readOrErr(readPos, checksumLen); err != nil {
+				fmt.Fprintf(&debugBuf, "checksum: %v ", err)
+				return
+			}
 			_ = proto.Unmarshal(buf, checksum)
 			fmt.Fprintf(&debugBuf, "checksum: %+v ", checksum)
 
 			// Read index size from the footer.
 			readPos -= 4
-			buf = t.readNoFail(readPos, 4)
+			if buf, err = t.readOrErr(readPos, 4); err != nil {
+				fmt.Fprintf(&debugBuf, "indexLen: %v ", err)
+				return
+			}
 			indexLen := int(y.BytesToU32(buf))
 			fmt.Fprintf(&debugBuf, "indexLen: %d ", indexLen)
 
 			// Read index.
 			readPos -= t.indexLen
 			t.indexStart = readPos
-			indexData := t.readNoFail(readPos, t.indexLen)
+			indexData, err := t.readOrErr(readPos, t.indexLen)
+			if err != nil {
+				fmt.Fprintf(&debugBuf, "index: %v ", err)
+				return
+			}
 			fmt.Fprintf(&debugBuf, "index: %v ", indexData)
 		}
 	}()
@@ -427,6 +441,13 @@ func (t *Table) readNoFail(off, sz int) []byte {
 	return res
 }
 
+func (t *Table) readOrErr(off, sz int) ([]byte, error) {
+	if off < 0 {
+		return nil, errors.New("read offset less than zero. Data corrupted")
+	}
+	return t.readNoFail(off, sz), nil
+}
+
 // initIndex reads the index and populate the necessary table fields and returns
 // first block offset
 func (t *Table) initIndex() (*fb.BlockOffset, error) {
@@ -434,7 +455,10 @@ func (t *Table) initIndex() (*fb.BlockOffset, error) {
 
 	// Read checksum len from the last 4 bytes.
 	readPos -= 4
-	buf := t.readNoFail(readPos, 4)
+	buf, err := t.readOrErr(readPos, 4)
+	if err != nil {
+		return nil, err
+	}
 	checksumLen := int(y.BytesToU32(buf))
 	if checksumLen < 0 {
 		return nil, errors.New("checksum length less than zero. Data corrupted")
@@ -443,20 +467,27 @@ func (t *Table) initIndex() (*fb.BlockOffset, error) {
 	// Read checksum.
 	expectedChk := &pb.Checksum{}
 	readPos -= checksumLen
-	buf = t.readNoFail(readPos, checksumLen)
+	if buf, err = t.readOrErr(readPos, checksumLen); err != nil {
+		return nil, err
+	}
 	if err := proto.Unmarshal(buf, expectedChk); err != nil {
 		return nil, err
 	}
 
 	// Read index size from the footer.
 	readPos -= 4
-	buf = t.readNoFail(readPos, 4)
+	if buf, err = t.readOrErr(readPos, 4); err != nil {
+		return nil, err
+	}
 	t.indexLen = int(y.BytesToU32(buf))
 
 	// Read index.
 	readPos -= t.indexLen
 	t.indexStart = readPos
-	data := t.readNoFail(readPos, t.indexLen)
+	data, err := t.readOrErr(readPos, t.indexLen)
+	if err != nil {
+		return nil, err
+	}
 
 	if err := y.VerifyChecksum(data, expectedChk); err != nil {
 		return nil, y.Wrapf(err, "failed to verify checksum for table: %s", t.Filename())
